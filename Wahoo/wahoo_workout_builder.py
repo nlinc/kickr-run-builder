@@ -11,7 +11,7 @@ import extra_streamlit_components as stx
 # ==========================================
 # 1. CONFIGURATION
 # ==========================================
-st.set_page_config(page_title="Wahoo KICKR RUN Builder", page_icon="🏃")
+st.set_page_config(page_title="Wahoo KICKR RUN Builder", page_icon="🏃", layout="centered")
 
 # Load Secrets
 try:
@@ -300,8 +300,11 @@ if st.session_state.intervals:
     st.write("### Plan Preview")
     total_time = 0
     
-    # ⬇️ UPDATED: Added headers for Move functionality
-    h1, h2, h3, h4, h5 = st.columns([0.5, 2, 1.5, 2, 1])
+    # ⬇️ UPDATED: Wider "Actions" column (1.5) and adjusted others to fit
+    # Total = 0.5 + 1.5 + 1.2 + 2.3 + 1.5 = 7.0
+    col_ratios = [0.5, 1.5, 1.2, 2.3, 1.5]
+    
+    h1, h2, h3, h4, h5 = st.columns(col_ratios)
     h1.write("**#**")
     h2.write("**Label**")
     h3.write("**Duration**")
@@ -312,8 +315,7 @@ if st.session_state.intervals:
     for idx, interval in enumerate(st.session_state.intervals):
         total_time += interval['duration']
         
-        # ⬇️ UPDATED: Adjusted column widths to fit buttons
-        cols = st.columns([0.5, 2, 1.5, 2, 1])
+        cols = st.columns(col_ratios)
         
         m = interval['duration'] // 60
         s = interval['duration'] % 60
@@ -333,7 +335,7 @@ if st.session_state.intervals:
         else:
             cols[3].write(f"{interval['zone_name']} Pace")
             
-        # ⬇️ UPDATED: Action Buttons (Up/Down/Delete)
+        # Action Buttons
         with cols[4]:
             c_up, c_down, c_del = st.columns(3)
             # Disable Up button for first item, Down button for last item
