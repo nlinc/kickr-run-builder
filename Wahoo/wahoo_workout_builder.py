@@ -130,7 +130,18 @@ def schedule_workout(token, plan_id, plan_name, duration_sec):
         return None
 
 # ==========================================
-# 4. AUTH FLOW EXECUTION
+# 4. HELPER FUNCTIONS
+# ==========================================
+
+def move_interval(index, direction):
+    """Moves an interval up (-1) or down (+1) in the list."""
+    if direction == -1 and index > 0:
+        st.session_state.intervals[index], st.session_state.intervals[index-1] = st.session_state.intervals[index-1], st.session_state.intervals[index]
+    elif direction == 1 and index < len(st.session_state.intervals) - 1:
+        st.session_state.intervals[index], st.session_state.intervals[index+1] = st.session_state.intervals[index+1], st.session_state.intervals[index]
+
+# ==========================================
+# 5. AUTH FLOW EXECUTION
 # ==========================================
 
 st.title("🏃 KICKR RUN Workout Builder")
@@ -164,7 +175,7 @@ if not active_token:
                 cookie_manager.delete('wahoo_refresh_token')
 
 # ==========================================
-# 5. UI LOGIC
+# 6. UI LOGIC
 # ==========================================
 
 if not active_token:
@@ -216,9 +227,6 @@ ZONES = {
     "Zone 7 (Neuromus)":   (1.33, 1.50)
 }
 
-# NOTE: Removed 'with st.form' to allow instant updates of UI elements
-# We handle state clearing manually on button click
-
 # Row 1: Label and Duration
 r1_col1, r1_col2 = st.columns([1.5, 1])
 
@@ -239,7 +247,6 @@ st.write("") # Spacer
 r2_col1, r2_col2 = st.columns([1, 2])
 
 with r2_col1:
-    # Radio triggers rerun immediately now!
     target_mode = st.radio("Target Mode", ["Select Zone", "Custom %"], key="input_mode")
 
 with r2_col2:
@@ -263,7 +270,6 @@ if add_clicked:
     if i_total_seconds == 0:
         st.error("Duration cannot be 0 seconds.")
     else:
-        # Determine Type automatically
         if target_pct < 0.69:
             auto_type = "wu" if "Warm" in i_name else "recover"
         elif target_pct > 1.05:
@@ -271,7 +277,6 @@ if add_clicked:
         else:
             auto_type = "active"
 
-        # Append to List
         st.session_state.intervals.append({
             "name": i_name,
             "duration": i_total_seconds,
@@ -284,12 +289,9 @@ if add_clicked:
             "zone_name": selected_zone_name
         })
         
-        # Reset Logic (Manual "Clear on Submit")
-        # We delete the keys from session state so they reload with defaults on rerun
         del st.session_state["input_name"]
         del st.session_state["input_min"]
         del st.session_state["input_sec"]
-        # We keep "input_mode" and "input_zone" so user can add multiple similar intervals fast
         
         st.rerun()
 
@@ -298,26 +300,25 @@ if st.session_state.intervals:
     st.write("### Plan Preview")
     total_time = 0
     
-    # Header
-    h1, h2, h3, h4, h5 = st.columns([0.5, 2, 1.5, 2, 0.5])
+    # ⬇️ UPDATED: Added headers for Move functionality
+    h1, h2, h3, h4, h5 = st.columns([0.5, 2, 1.5, 2, 1])
     h1.write("**#**")
     h2.write("**Label**")
     h3.write("**Duration**")
     h4.write("**Target**")
-    h5.write("**Del**")
+    h5.write("**Actions**")
     st.divider()
 
     for idx, interval in enumerate(st.session_state.intervals):
         total_time += interval['duration']
         
-        cols = st.columns([0.5, 2, 1.5, 2, 0.5])
+        # ⬇️ UPDATED: Adjusted column widths to fit buttons
+        cols = st.columns([0.5, 2, 1.5, 2, 1])
         
-        # Format Duration
         m = interval['duration'] // 60
         s = interval['duration'] % 60
         dur_str = f"{m}m {s}s" if s > 0 else f"{m}m"
 
-        # Format Pace
         pace_min = (1609.34 / (threshold_pace_mps * interval['target_high'])) / 60
         pace_max = (1609.34 / (threshold_pace_mps * interval['target_low'])) / 60
         p_min_str = f"{int(pace_min)}:{int((pace_min%1)*60):02d}"
@@ -332,9 +333,19 @@ if st.session_state.intervals:
         else:
             cols[3].write(f"{interval['zone_name']} Pace")
             
-        if cols[4].button("❌", key=f"del_{idx}"):
-            st.session_state.intervals.pop(idx)
-            st.rerun()
+        # ⬇️ UPDATED: Action Buttons (Up/Down/Delete)
+        with cols[4]:
+            c_up, c_down, c_del = st.columns(3)
+            # Disable Up button for first item, Down button for last item
+            if c_up.button("⬆️", key=f"up_{idx}", disabled=(idx == 0)):
+                move_interval(idx, -1)
+                st.rerun()
+            if c_down.button("⬇️", key=f"down_{idx}", disabled=(idx == len(st.session_state.intervals)-1)):
+                move_interval(idx, 1)
+                st.rerun()
+            if c_del.button("❌", key=f"del_{idx}"):
+                st.session_state.intervals.pop(idx)
+                st.rerun()
     
     st.caption(f"Total Workout Duration: {int(total_time/60)} minutes")
     
