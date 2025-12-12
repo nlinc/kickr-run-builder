@@ -25,7 +25,7 @@ except (FileNotFoundError, KeyError):
 SCOPES = "power_zones_read power_zones_write workouts_read workouts_write plans_read plans_write user_read"
 
 # ==========================================
-# 2. AUTHENTICATION (Fixed Loop Logic)
+# 2. AUTHENTICATION
 # ==========================================
 
 # Instantiate outside of cache
@@ -204,8 +204,17 @@ col1, col2 = st.columns(2)
 with col1:
     workout_name = st.text_input("Workout Name", "Interval Run")
 with col2:
-    pace_min_mile = st.number_input("Threshold Pace (min/mile)", 4.0, 15.0, 8.5, 0.1)
-    threshold_pace_mps = 1609.34 / (pace_min_mile * 60)
+    st.write("**Threshold Pace (min/mile)**")
+    # ⬇️ CHANGED: Split Minutes and Seconds for easier input
+    p_col1, p_col2 = st.columns(2)
+    with p_col1:
+        p_min = st.number_input("Minutes", 4, 15, 8, key="p_min")
+    with p_col2:
+        p_sec = st.number_input("Seconds", 0, 59, 30, key="p_sec")
+    
+    # Calculate Meters per Second for API
+    total_seconds_per_mile = (p_min * 60) + p_sec
+    threshold_pace_mps = 1609.34 / total_seconds_per_mile
 
 st.subheader("🛠️ Build Intervals")
 
