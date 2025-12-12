@@ -6,26 +6,37 @@ import time
 import urllib.parse
 import uuid
 from datetime import datetime, timezone
+import extra_streamlit_components as stx
 
 # ==========================================
-# CONFIGURATION & SECRETS
+# 1. CONFIGURATION
 # ==========================================
-# Try to load from Streamlit Secrets (Cloud) or fallback to Sandbox (Local)
+st.set_page_config(page_title="Wahoo KICKR RUN Builder", page_icon="🏃")
+
+# Load Secrets or Fallback
 try:
     CLIENT_ID = st.secrets["WAHOO_CLIENT_ID"]
     CLIENT_SECRET = st.secrets["WAHOO_CLIENT_SECRET"]
     REDIRECT_URI = st.secrets["WAHOO_REDIRECT_URI"]
 except (FileNotFoundError, KeyError):
-    # 🚨 Sandbox Defaults (Only for running on your laptop)
-    CLIENT_ID = 'INSERT_YOUR_CLIENT_ID_HERE'
-    CLIENT_SECRET = 'INSERT_YOUR_CLIENT_SECRET_HERE'
-    REDIRECT_URI = 'http://localhost:8501'
+    # Local Sandbox Defaults
+    CLIENT_ID = 'Rn_RRKHwFLUHyYKTBq6filJo-MmPbX2h3caMwL2jOg4'
+    CLIENT_SECRET = 'lEQDPbc1EySK1NT0-0ZVN6G5wyVZHiDXzfxq0NX0e1o'
+    REDIRECT_URI = 'https://localhost'
 
-SCOPES = "power_zones_read power_zones_write workouts_read workouts_write plans_read plans_write routes_read routes_write user_read"
+# Scopes needed for plans/workouts
+SCOPES = "power_zones_read power_zones_write workouts_read workouts_write plans_read plans_write user_read"
 
 # ==========================================
-# BACKEND LOGIC
+# 2. AUTHENTICATION (The "Sticky" Logic)
 # ==========================================
+
+# Initialize Cookie Manager
+@st.cache_resource(experimental_allow_widgets=True)
+def get_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_manager()
 
 def get_auth_url():
     params = {
@@ -36,7 +47,30 @@ def get_auth_url():
     }
     return f"https://api.wahooligan.com/oauth/authorize?{urllib.parse.urlencode(params)}"
 
+def refresh_access_token(refresh_token):
+    """Uses the stored refresh token to get a fresh access token silently."""
+    url = "https://api.wahooligan.com/oauth/token"
+    payload = {
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "redirect_uri": REDIRECT_URI
+    }
+    try:
+        res = requests.post(url, data=payload)
+        if res.status_code == 200:
+            tokens = res.json()
+            # Update the refresh token in the cookie (they rotate)
+            cookie_manager.set('wahoo_refresh_token', tokens['refresh_token'], key="set_ref")
+            return tokens['access_token']
+        else:
+            return None
+    except:
+        return None
+
 def exchange_code_for_token(code):
+    """Exchanges the one-time auth code for tokens."""
     url = "https://api.wahooligan.com/oauth/token"
     payload = {
         "client_id": CLIENT_ID,
@@ -49,8 +83,8 @@ def exchange_code_for_token(code):
         res = requests.post(url, data=payload)
         if res.status_code == 200:
             tokens = res.json()
-            # Store in Session State (Browser Memory)
-            st.session_state['wahoo_token'] = tokens['access_token']
+            # 💾 SAVE REFRESH TOKEN TO BROWSER COOKIE
+            cookie_manager.set('wahoo_refresh_token', tokens['refresh_token'], key="set_init")
             return tokens['access_token']
         else:
             st.error(f"Auth Failed: {res.text}")
@@ -59,39 +93,22 @@ def exchange_code_for_token(code):
         st.error(f"Connection Error: {e}")
         return None
 
-def check_token_validity(access_token):
-    # Simple check to see if the token works
-    try:
-        res = requests.get("https://api.wahooligan.com/v1/user", headers={"Authorization": f"Bearer {access_token}"})
-        return res.status_code == 200
-    except:
-        return False
-
-def get_valid_token():
-    # Check if we are already logged in during this session
-    if 'wahoo_token' in st.session_state:
-        token = st.session_state['wahoo_token']
-        if check_token_validity(token):
-            return token
-        else:
-            # Token expired or invalid
-            del st.session_state['wahoo_token']
-            return None
-    return None
+# ==========================================
+# 3. API LOGIC (Plans & Workouts)
+# ==========================================
 
 def upload_plan_to_wahoo(token, plan_json, plan_name):
-    # 1. Prepare Plan File
+    # Encode JSON file to Base64
     json_str = json.dumps(plan_json)
     b64_file = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
     
     payload = {
         "plan[file]": f"data:application/json;base64,{b64_file}",
         "plan[filename]": "kickr_run.json",
-        "plan[external_id]": f"RUN_{int(time.time())}",
+        "plan[external_id]": f"RUN_{int(time.time())}", 
         "plan[provider_updated_at]": datetime.now(timezone.utc).isoformat()
     }
     
-    # 2. POST to Plans Endpoint
     headers = {"Authorization": f"Bearer {token}"}
     res = requests.post("https://api.wahooligan.com/v1/plans", headers=headers, data=payload)
     
@@ -102,7 +119,6 @@ def upload_plan_to_wahoo(token, plan_json, plan_name):
         return None
 
 def schedule_workout(token, plan_id, plan_name, duration_sec):
-    # 3. POST to Workouts Endpoint (Schedule for NOW)
     headers = {"Authorization": f"Bearer {token}"}
     start_time = datetime.now(timezone.utc).isoformat()
     minutes_int = int(duration_sec / 60)
@@ -112,7 +128,7 @@ def schedule_workout(token, plan_id, plan_name, duration_sec):
             "name": plan_name,
             "starts": start_time,
             "plan_id": plan_id,
-            "workout_type_id": 1, 
+            "workout_type_id": 1, # Generic Run
             "workout_token": str(uuid.uuid4()),
             "minutes": minutes_int
         }
@@ -126,52 +142,64 @@ def schedule_workout(token, plan_id, plan_name, duration_sec):
         return None
 
 # ==========================================
-# UI LOGIC
+# 4. MAIN UI EXECUTION
 # ==========================================
-
-st.set_page_config(page_title="Wahoo KICKR RUN Builder", page_icon="🏃")
-
-# 1. Handle OAuth Redirect (Auto-Login logic)
-if 'code' in st.query_params:
-    code = st.query_params['code']
-    exchange_code_for_token(code)
-    # Clear URL to look clean
-    st.query_params.clear()
-    st.rerun()
 
 st.title("🏃 KICKR RUN Workout Builder")
 
-# 2. Check Connection
-token = get_valid_token()
+# --- AUTHENTICATION HANDLER ---
+access_token = None
+stored_refresh_token = cookie_manager.get('wahoo_refresh_token')
 
-if not token:
-    st.warning("⚠️ Not Connected")
-    auth_url = get_auth_url()
-    st.markdown("### Step 1: Login")
-    # This button takes the user to Wahoo, then Wahoo sends them back here
-    st.link_button("Login with Wahoo", auth_url)
-    st.stop() # Stop rendering the rest until logged in
+# Case A: Handling Redirect from Wahoo
+if 'code' in st.query_params:
+    code = st.query_params['code']
+    with st.spinner("Logging in..."):
+        access_token = exchange_code_for_token(code)
+    st.query_params.clear() # Clean URL
+    st.rerun()
 
-st.success("✅ Connected to Wahoo")
+# Case B: We have a cookie, try to refresh silently
+elif stored_refresh_token:
+    if 'session_access_token' not in st.session_state:
+        # Get a fresh access token using the refresh token
+        new_token = refresh_access_token(stored_refresh_token)
+        if new_token:
+            st.session_state['session_access_token'] = new_token
+            access_token = new_token
+        else:
+            st.warning("Session expired. Please log in again.")
+            cookie_manager.delete('wahoo_refresh_token')
+    else:
+        access_token = st.session_state['session_access_token']
 
-# --- WORKOUT SETTINGS ---
+# Case C: No cookie, No code -> Show Login
+if not access_token:
+    st.info("Please log in to Wahoo Cloud to enable uploading.")
+    st.link_button("Login with Wahoo", get_auth_url())
+    st.stop()
+else:
+    st.success("✅ Connected to Wahoo Cloud")
+
 st.divider()
+
+# --- WORKOUT BUILDER UI ---
+
 col1, col2 = st.columns(2)
 with col1:
-    workout_name = st.text_input("Workout Name", "My KICKR Run")
+    workout_name = st.text_input("Workout Name", "Interval Run")
 with col2:
-    pace_min_mile = st.number_input("Threshold Pace (min/mile)", 4.0, 15.0, 8.0, 0.1, help="e.g. 8.5 for 8:30 min/mile")
-    # Convert to m/s for API
+    # KICKR RUN uses Speed, so we convert Min/Mile -> M/S
+    pace_min_mile = st.number_input("Threshold Pace (min/mile)", 4.0, 15.0, 8.5, 0.1, help="Example: 8.5 means 8:30 min/mile")
     threshold_pace_mps = 1609.34 / (pace_min_mile * 60)
 
-# --- INTERVAL BUILDER ---
 st.subheader("🛠️ Build Intervals")
 
 if 'intervals' not in st.session_state:
     st.session_state.intervals = []
 
-# Form to add new intervals
-with st.form("add_interval_form", clear_on_submit=True):
+# Interval Input Form
+with st.form("add_interval", clear_on_submit=True):
     c1, c2, c3 = st.columns(3)
     with c1:
         i_name = st.text_input("Label", "Interval")
@@ -180,65 +208,82 @@ with st.form("add_interval_form", clear_on_submit=True):
     with c3:
         i_pace_pct = st.slider("Pace (% of Threshold)", 50, 150, 100, 5)
     
-    type_options = {"Warm Up": "wu", "Active": "active", "Recovery": "recover", "Cool Down": "cd"}
-    i_type_label = st.selectbox("Type", list(type_options.keys()))
-    i_type_code = type_options[i_type_label]
+    # Map Friendly Labels to API Codes
+    type_map = {"Warm Up": "wu", "Active": "active", "Recovery": "recover", "Cool Down": "cd"}
+    i_type_label = st.selectbox("Type", list(type_map.keys()))
     
     if st.form_submit_button("➕ Add Interval"):
         st.session_state.intervals.append({
             "name": i_name,
             "duration": i_dur,
-            "type": i_type_code,
+            "type_code": type_map[i_type_label],
             "type_label": i_type_label,
             "pace_pct": i_pace_pct / 100.0
         })
 
-# --- PREVIEW & UPLOAD ---
+# Preview & Upload
 if st.session_state.intervals:
-    st.write("### Current Plan")
+    st.write("### Plan Preview")
+    
     total_time = 0
     for idx, interval in enumerate(st.session_state.intervals):
         total_time += interval['duration']
-        cols = st.columns([0.1, 0.4, 0.2, 0.2, 0.1])
+        # Calculate actual pace for display
+        target_mps = threshold_pace_mps * interval['pace_pct']
+        target_min_mile = (1609.34 / target_mps) / 60
+        mins = int(target_min_mile)
+        secs = int((target_min_mile - mins) * 60)
+        
+        cols = st.columns([0.1, 0.3, 0.2, 0.3, 0.1])
         cols[0].write(f"#{idx+1}")
-        cols[1].write(f"**{interval['name']}** ({interval.get('type_label', interval['type'])})")
+        cols[1].write(f"**{interval['name']}** ({interval['type_label']})")
         cols[2].write(f"{interval['duration']}s")
-        cols[3].write(f"{int(interval['pace_pct']*100)}% Pace")
+        cols[3].write(f"{int(interval['pace_pct']*100)}% ({mins}:{secs:02d}/mi)")
         if cols[4].button("❌", key=f"del_{idx}"):
             st.session_state.intervals.pop(idx)
             st.rerun()
     
     st.caption(f"Total Duration: {int(total_time/60)} minutes")
 
-    if st.button("🚀 Upload & Schedule for Today", type="primary"):
-        with st.spinner("Uploading plan to Wahoo Cloud..."):
-            # Construct JSON
+    if st.button("🚀 Upload & Schedule", type="primary"):
+        with st.spinner("Talking to Wahoo..."):
+            
+            # Construct JSON Payload
             plan_json = {
                 "header": {
                     "name": workout_name,
                     "version": "1.0.0",
-                    "description": "Created via Streamlit Builder",
-                    "workout_type_family": 1,
-                    "workout_type_location": 0,
+                    "description": "Custom KICKR RUN Interval Plan",
+                    "workout_type_family": 1, # Running
+                    "workout_type_location": 0, # Indoor
                     "threshold_speed": threshold_pace_mps
                 },
                 "intervals": []
             }
+            
             for i in st.session_state.intervals:
                 plan_json["intervals"].append({
                     "name": i['name'],
                     "exit_trigger_type": "time",
                     "exit_trigger_value": i['duration'],
-                    "intensity_type": i['type'],
-                    "targets": [{"type": "threshold_speed", "low": i['pace_pct'] - 0.02, "high": i['pace_pct'] + 0.02}]
+                    "intensity_type": i['type_code'],
+                    # IMPORTANT: API requires Low/High, but for ERG mode they can be tight
+                    "targets": [{
+                        "type": "threshold_speed", 
+                        "low": i['pace_pct'] - 0.01, 
+                        "high": i['pace_pct'] + 0.01
+                    }]
                 })
             
-            # Execute API Calls
-            plan_id = upload_plan_to_wahoo(token, plan_json, workout_name)
+            # 1. Upload Plan
+            plan_id = upload_plan_to_wahoo(access_token, plan_json, workout_name)
+            
+            # 2. Schedule Workout
             if plan_id:
-                w_id = schedule_workout(token, plan_id, workout_name, total_time)
+                w_id = schedule_workout(access_token, plan_id, workout_name, total_time)
                 if w_id:
-                    st.success(f"🎉 Success! Workout Scheduled (ID: {w_id}). Check your Wahoo App!")
+                    st.success(f"Success! Workout scheduled for NOW (ID: {w_id}). Check your Wahoo Element app or KICKR.")
                     st.balloons()
+
 else:
-    st.info("Add some intervals above to begin.")
+    st.info("Add intervals to enable uploading.")
