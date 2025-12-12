@@ -37,7 +37,7 @@ SCOPES = "power_zones_read power_zones_write workouts_read workouts_write plans_
 # ==========================================
 
 # Initialize Cookie Manager
-@st.cache_resource(experimental_allow_widgets=True)
+@st.cache_resource
 def get_manager():
     return stx.CookieManager()
 
