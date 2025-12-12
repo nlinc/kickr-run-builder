@@ -13,16 +13,21 @@ import extra_streamlit_components as stx
 # ==========================================
 st.set_page_config(page_title="Wahoo KICKR RUN Builder", page_icon="🏃")
 
-# Load Secrets or Fallback
+# Load Secrets securely
 try:
     CLIENT_ID = st.secrets["WAHOO_CLIENT_ID"]
     CLIENT_SECRET = st.secrets["WAHOO_CLIENT_SECRET"]
     REDIRECT_URI = st.secrets["WAHOO_REDIRECT_URI"]
 except (FileNotFoundError, KeyError):
-    # Local Sandbox Defaults
-    CLIENT_ID = 'Rn_RRKHwFLUHyYKTBq6filJo-MmPbX2h3caMwL2jOg4'
-    CLIENT_SECRET = 'lEQDPbc1EySK1NT0-0ZVN6G5wyVZHiDXzfxq0NX0e1o'
-    REDIRECT_URI = 'https://localhost'
+    # 🚨 Stop execution if secrets are missing (prevents hardcoding risks)
+    st.error("❌ Missing Secrets! Please create a `.streamlit/secrets.toml` file with your Wahoo credentials.")
+    st.info("The file should look like this:\n"
+            "```toml\n"
+            "WAHOO_CLIENT_ID = 'your_client_id'\n"
+            "WAHOO_CLIENT_SECRET = 'your_client_secret'\n"
+            "WAHOO_REDIRECT_URI = 'https://localhost'\n"
+            "```")
+    st.stop()
 
 # Scopes needed for plans/workouts
 SCOPES = "power_zones_read power_zones_write workouts_read workouts_write plans_read plans_write user_read"
