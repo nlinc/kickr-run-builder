@@ -188,7 +188,6 @@ with col1:
 
 with col2:
     st.write("Threshold Pace (min/mi)")
-    # Nested columns to keep Min/Sec tight together
     t_col1, t_col2 = st.columns(2)
     with t_col1:
         p_min = st.number_input("Min", 4, 15, 8, key="p_min", label_visibility="collapsed")
@@ -208,86 +207,98 @@ if 'intervals' not in st.session_state:
 
 # --- CUSTOM ZONE DEFINITIONS ---
 ZONES = {
-    "Zone 1 (Recovery)":   (0.50, 0.69), # < 12:33 pace
-    "Zone 2 (Endurance)":  (0.69, 0.83), # 10:29 - 12:32 pace
-    "Zone 3 (Tempo)":      (0.83, 0.91), # 9:32 - 10:28 pace
-    "Zone 4 (Threshold)":  (0.91, 1.05), # 8:14 - 9:31 pace
-    "Zone 5 (VO2 Max)":    (1.05, 1.18), # 7:22 - 8:13 pace
-    "Zone 6 (Anaerobic)":  (1.18, 1.33), # 6:30 - 7:21 pace
-    "Zone 7 (Neuromus)":   (1.33, 1.50)  # > 6:29 pace
+    "Zone 1 (Recovery)":   (0.50, 0.69),
+    "Zone 2 (Endurance)":  (0.69, 0.83),
+    "Zone 3 (Tempo)":      (0.83, 0.91),
+    "Zone 4 (Threshold)":  (0.91, 1.05),
+    "Zone 5 (VO2 Max)":    (1.05, 1.18),
+    "Zone 6 (Anaerobic)":  (1.18, 1.33),
+    "Zone 7 (Neuromus)":   (1.33, 1.50)
 }
 
-with st.form("add_interval", clear_on_submit=False): # Changed to False so we can see what we typed, user can clear manually if needed
-    
-    # Row 1: Label and Duration
-    r1_col1, r1_col2 = st.columns([1.5, 1])
-    
-    with r1_col1:
-        i_name = st.text_input("Label", "Interval")
-    
-    with r1_col2:
-        st.write("Duration")
-        d_col1, d_col2 = st.columns(2)
-        with d_col1:
-            i_dur_min = st.number_input("Min", 0, 120, 5, key="i_dur_min")
-        with d_col2:
-            i_dur_sec = st.number_input("Sec", 0, 59, 0, key="i_dur_sec")
-        
-        # Calculate total seconds
-        i_total_seconds = (i_dur_min * 60) + i_dur_sec
+# NOTE: Removed 'with st.form' to allow instant updates of UI elements
+# We handle state clearing manually on button click
 
-    st.write("") # Spacer
+# Row 1: Label and Duration
+r1_col1, r1_col2 = st.columns([1.5, 1])
 
-    # Row 2: Target Selection
-    r2_col1, r2_col2 = st.columns([1, 2])
-    
-    with r2_col1:
-        target_mode = st.radio("Target Mode", ["Select Zone", "Custom %"])
-    
-    with r2_col2:
-        if target_mode == "Select Zone":
-            selected_zone_name = st.selectbox("Select Zone", list(ZONES.keys()))
-            range_low, range_high = ZONES[selected_zone_name]
-            target_pct = (range_low + range_high) / 2
-        else:
-            user_pct = st.slider("Pace (% of Threshold)", 50, 150, 100, 1)
-            target_pct = user_pct / 100.0
-            range_low = target_pct - 0.02
-            range_high = target_pct + 0.02
+with r1_col1:
+    i_name = st.text_input("Label", key="input_name", value="Interval")
 
-    # Auto-type logic
-    if target_pct < 0.69:
-        auto_type = "wu" if "Warm" in i_name else "recover"
-    elif target_pct > 1.05:
-        auto_type = "active"
+with r1_col2:
+    st.write("Duration")
+    d_col1, d_col2 = st.columns(2)
+    with d_col1:
+        i_dur_min = st.number_input("Min", 0, 120, key="input_min", value=5, label_visibility="collapsed")
+    with d_col2:
+        i_dur_sec = st.number_input("Sec", 0, 59, key="input_sec", value=0, label_visibility="collapsed")
+
+st.write("") # Spacer
+
+# Row 2: Target Selection
+r2_col1, r2_col2 = st.columns([1, 2])
+
+with r2_col1:
+    # Radio triggers rerun immediately now!
+    target_mode = st.radio("Target Mode", ["Select Zone", "Custom %"], key="input_mode")
+
+with r2_col2:
+    if target_mode == "Select Zone":
+        selected_zone_name = st.selectbox("Select Zone", list(ZONES.keys()), key="input_zone")
+        range_low, range_high = ZONES[selected_zone_name]
+        target_pct = (range_low + range_high) / 2
     else:
-        auto_type = "active"
-        
-    submitted = st.form_submit_button("➕ Add Interval", type="primary")
+        user_pct = st.slider("Pace (% of Threshold)", 50, 150, key="input_slider", value=100)
+        target_pct = user_pct / 100.0
+        range_low = target_pct - 0.02
+        range_high = target_pct + 0.02
+        selected_zone_name = f"{int(target_pct*100)}%"
 
-    if submitted:
-        if i_total_seconds == 0:
-            st.error("Duration cannot be 0 seconds.")
+# Add Button Logic
+add_clicked = st.button("➕ Add Interval", type="primary")
+
+if add_clicked:
+    i_total_seconds = (i_dur_min * 60) + i_dur_sec
+    
+    if i_total_seconds == 0:
+        st.error("Duration cannot be 0 seconds.")
+    else:
+        # Determine Type automatically
+        if target_pct < 0.69:
+            auto_type = "wu" if "Warm" in i_name else "recover"
+        elif target_pct > 1.05:
+            auto_type = "active"
         else:
-            st.session_state.intervals.append({
-                "name": i_name,
-                "duration": i_total_seconds,
-                "type_code": auto_type,
-                "type_label": "Zone/Custom",
-                "pace_pct": target_pct,
-                "target_low": range_low,
-                "target_high": range_high,
-                "mode": target_mode,
-                "zone_name": selected_zone_name if target_mode == "Select Zone" else f"{int(target_pct*100)}%"
-            })
-            st.rerun() # Rerun to update the preview table immediately
+            auto_type = "active"
+
+        # Append to List
+        st.session_state.intervals.append({
+            "name": i_name,
+            "duration": i_total_seconds,
+            "type_code": auto_type,
+            "type_label": "Zone/Custom",
+            "pace_pct": target_pct,
+            "target_low": range_low,
+            "target_high": range_high,
+            "mode": target_mode,
+            "zone_name": selected_zone_name
+        })
+        
+        # Reset Logic (Manual "Clear on Submit")
+        # We delete the keys from session state so they reload with defaults on rerun
+        del st.session_state["input_name"]
+        del st.session_state["input_min"]
+        del st.session_state["input_sec"]
+        # We keep "input_mode" and "input_zone" so user can add multiple similar intervals fast
+        
+        st.rerun()
 
 # --- PREVIEW TABLE ---
 if st.session_state.intervals:
     st.write("### Plan Preview")
     total_time = 0
     
-    # Create a nice header
+    # Header
     h1, h2, h3, h4, h5 = st.columns([0.5, 2, 1.5, 2, 0.5])
     h1.write("**#**")
     h2.write("**Label**")
@@ -301,12 +312,12 @@ if st.session_state.intervals:
         
         cols = st.columns([0.5, 2, 1.5, 2, 0.5])
         
-        # Format Duration nicely (MM:SS)
+        # Format Duration
         m = interval['duration'] // 60
         s = interval['duration'] % 60
         dur_str = f"{m}m {s}s" if s > 0 else f"{m}m"
 
-        # Format Pace Range nicely
+        # Format Pace
         pace_min = (1609.34 / (threshold_pace_mps * interval['target_high'])) / 60
         pace_max = (1609.34 / (threshold_pace_mps * interval['target_low'])) / 60
         p_min_str = f"{int(pace_min)}:{int((pace_min%1)*60):02d}"
@@ -315,6 +326,7 @@ if st.session_state.intervals:
         cols[0].write(f"{idx+1}")
         cols[1].write(f"**{interval['name']}**")
         cols[2].write(dur_str)
+        
         if interval['mode'] == 'Select Zone':
             cols[3].write(f"{interval['zone_name']} ({p_min_str}-{p_max_str})")
         else:
