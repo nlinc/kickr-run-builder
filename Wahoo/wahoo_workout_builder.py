@@ -179,29 +179,34 @@ else:
             del st.session_state['access_token']
         st.rerun()
 
-# --- WORKOUT BUILDER ---
-col1, col2 = st.columns(2)
+# --- HEADER SETTINGS ---
+st.subheader("Workout Settings")
+col1, col2 = st.columns([2, 1])
+
 with col1:
     workout_name = st.text_input("Workout Name", "Zone Run")
+
 with col2:
-    st.write("**Threshold Pace (min/mile)**")
-    p_col1, p_col2 = st.columns(2)
-    # ⬇️ UPDATED: Default set to 8:39
-    with p_col1:
-        p_min = st.number_input("Minutes", 4, 15, 8, key="p_min")
-    with p_col2:
-        p_sec = st.number_input("Seconds", 0, 59, 39, key="p_sec")
+    st.write("Threshold Pace (min/mi)")
+    # Nested columns to keep Min/Sec tight together
+    t_col1, t_col2 = st.columns(2)
+    with t_col1:
+        p_min = st.number_input("Min", 4, 15, 8, key="p_min", label_visibility="collapsed")
+    with t_col2:
+        p_sec = st.number_input("Sec", 0, 59, 39, key="p_sec", label_visibility="collapsed")
     
     total_seconds_per_mile = (p_min * 60) + p_sec
     threshold_pace_mps = 1609.34 / total_seconds_per_mile
 
+st.divider()
+
+# --- INTERVAL BUILDER ---
 st.subheader("🛠️ Build Intervals")
 
 if 'intervals' not in st.session_state:
     st.session_state.intervals = []
 
 # --- CUSTOM ZONE DEFINITIONS ---
-# Calculated based on user's 8:39 Threshold
 ZONES = {
     "Zone 1 (Recovery)":   (0.50, 0.69), # < 12:33 pace
     "Zone 2 (Endurance)":  (0.69, 0.83), # 10:29 - 12:32 pace
@@ -212,17 +217,36 @@ ZONES = {
     "Zone 7 (Neuromus)":   (1.33, 1.50)  # > 6:29 pace
 }
 
-with st.form("add_interval", clear_on_submit=True):
-    c1, c2, c3 = st.columns(3)
-    with c1: 
+with st.form("add_interval", clear_on_submit=False): # Changed to False so we can see what we typed, user can clear manually if needed
+    
+    # Row 1: Label and Duration
+    r1_col1, r1_col2 = st.columns([1.5, 1])
+    
+    with r1_col1:
         i_name = st.text_input("Label", "Interval")
-    with c2: 
-        i_dur = st.number_input("Duration (seconds)", 30, 3600, 300, step=30)
-    with c3:
-        target_mode = st.radio("Target Mode", ["Select Zone", "Custom %"], horizontal=True)
+    
+    with r1_col2:
+        st.write("Duration")
+        d_col1, d_col2 = st.columns(2)
+        with d_col1:
+            i_dur_min = st.number_input("Min", 0, 120, 5, key="i_dur_min")
+        with d_col2:
+            i_dur_sec = st.number_input("Sec", 0, 59, 0, key="i_dur_sec")
         
+        # Calculate total seconds
+        i_total_seconds = (i_dur_min * 60) + i_dur_sec
+
+    st.write("") # Spacer
+
+    # Row 2: Target Selection
+    r2_col1, r2_col2 = st.columns([1, 2])
+    
+    with r2_col1:
+        target_mode = st.radio("Target Mode", ["Select Zone", "Custom %"])
+    
+    with r2_col2:
         if target_mode == "Select Zone":
-            selected_zone_name = st.selectbox("Zone", list(ZONES.keys()))
+            selected_zone_name = st.selectbox("Select Zone", list(ZONES.keys()))
             range_low, range_high = ZONES[selected_zone_name]
             target_pct = (range_low + range_high) / 2
         else:
@@ -231,6 +255,7 @@ with st.form("add_interval", clear_on_submit=True):
             range_low = target_pct - 0.02
             range_high = target_pct + 0.02
 
+    # Auto-type logic
     if target_pct < 0.69:
         auto_type = "wu" if "Warm" in i_name else "recover"
     elif target_pct > 1.05:
@@ -238,47 +263,71 @@ with st.form("add_interval", clear_on_submit=True):
     else:
         auto_type = "active"
         
-    if st.form_submit_button("➕ Add Interval"):
-        st.session_state.intervals.append({
-            "name": i_name,
-            "duration": i_dur,
-            "type_code": auto_type,
-            "type_label": "Zone/Custom",
-            "pace_pct": target_pct,
-            "target_low": range_low,
-            "target_high": range_high,
-            "mode": target_mode,
-            "zone_name": selected_zone_name if target_mode == "Select Zone" else f"{int(target_pct*100)}%"
-        })
+    submitted = st.form_submit_button("➕ Add Interval", type="primary")
 
+    if submitted:
+        if i_total_seconds == 0:
+            st.error("Duration cannot be 0 seconds.")
+        else:
+            st.session_state.intervals.append({
+                "name": i_name,
+                "duration": i_total_seconds,
+                "type_code": auto_type,
+                "type_label": "Zone/Custom",
+                "pace_pct": target_pct,
+                "target_low": range_low,
+                "target_high": range_high,
+                "mode": target_mode,
+                "zone_name": selected_zone_name if target_mode == "Select Zone" else f"{int(target_pct*100)}%"
+            })
+            st.rerun() # Rerun to update the preview table immediately
+
+# --- PREVIEW TABLE ---
 if st.session_state.intervals:
     st.write("### Plan Preview")
     total_time = 0
+    
+    # Create a nice header
+    h1, h2, h3, h4, h5 = st.columns([0.5, 2, 1.5, 2, 0.5])
+    h1.write("**#**")
+    h2.write("**Label**")
+    h3.write("**Duration**")
+    h4.write("**Target**")
+    h5.write("**Del**")
+    st.divider()
+
     for idx, interval in enumerate(st.session_state.intervals):
         total_time += interval['duration']
-        cols = st.columns([0.1, 0.4, 0.2, 0.2, 0.1])
-        cols[0].write(f"#{idx+1}")
         
-        # Display Pace Range for verification
+        cols = st.columns([0.5, 2, 1.5, 2, 0.5])
+        
+        # Format Duration nicely (MM:SS)
+        m = interval['duration'] // 60
+        s = interval['duration'] % 60
+        dur_str = f"{m}m {s}s" if s > 0 else f"{m}m"
+
+        # Format Pace Range nicely
         pace_min = (1609.34 / (threshold_pace_mps * interval['target_high'])) / 60
         pace_max = (1609.34 / (threshold_pace_mps * interval['target_low'])) / 60
-        
         p_min_str = f"{int(pace_min)}:{int((pace_min%1)*60):02d}"
         p_max_str = f"{int(pace_max)}:{int((pace_max%1)*60):02d}"
         
+        cols[0].write(f"{idx+1}")
         cols[1].write(f"**{interval['name']}**")
-        cols[2].write(f"{interval['duration']}s")
+        cols[2].write(dur_str)
         if interval['mode'] == 'Select Zone':
-            cols[3].write(f"**{interval['zone_name']}**\n({p_min_str} - {p_max_str}/mi)")
+            cols[3].write(f"{interval['zone_name']} ({p_min_str}-{p_max_str})")
         else:
-            cols[3].write(f"**{interval['zone_name']}**")
+            cols[3].write(f"{interval['zone_name']} Pace")
             
         if cols[4].button("❌", key=f"del_{idx}"):
             st.session_state.intervals.pop(idx)
             st.rerun()
     
-    if st.button("🚀 Upload & Schedule", type="primary"):
-        with st.spinner("Talking to Wahoo..."):
+    st.caption(f"Total Workout Duration: {int(total_time/60)} minutes")
+    
+    if st.button("🚀 Upload & Schedule to Wahoo", type="primary", use_container_width=True):
+        with st.spinner("Uploading plan..."):
             plan_json = {
                 "header": {
                     "name": workout_name,
