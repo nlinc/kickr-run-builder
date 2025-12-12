@@ -28,7 +28,6 @@ SCOPES = "power_zones_read power_zones_write workouts_read workouts_write plans_
 # 2. AUTHENTICATION
 # ==========================================
 
-# Instantiate outside of cache
 cookie_manager = stx.CookieManager()
 
 def get_auth_url():
@@ -41,7 +40,6 @@ def get_auth_url():
     return f"https://api.wahooligan.com/oauth/authorize?{urllib.parse.urlencode(params)}"
 
 def refresh_access_token(refresh_token):
-    """Refreshes token and updates cookie."""
     url = "https://api.wahooligan.com/oauth/token"
     payload = {
         "client_id": CLIENT_ID,
@@ -54,7 +52,6 @@ def refresh_access_token(refresh_token):
         res = requests.post(url, data=payload)
         if res.status_code == 200:
             tokens = res.json()
-            # Update Cookie for next time
             cookie_manager.set('wahoo_refresh_token', tokens['refresh_token'], key="set_ref")
             return tokens['access_token']
         else:
@@ -63,7 +60,6 @@ def refresh_access_token(refresh_token):
         return None
 
 def exchange_code_for_token(code):
-    """Exchanges code, saves to Session State AND Cookie."""
     url = "https://api.wahooligan.com/oauth/token"
     payload = {
         "client_id": CLIENT_ID,
@@ -76,13 +72,8 @@ def exchange_code_for_token(code):
         res = requests.post(url, data=payload)
         if res.status_code == 200:
             tokens = res.json()
-            
-            # 1. Save to Session State (Instant access for THIS run)
             st.session_state['access_token'] = tokens['access_token']
-            
-            # 2. Save to Cookie (Persistence for FUTURE runs)
             cookie_manager.set('wahoo_refresh_token', tokens['refresh_token'], key="set_init")
-            
             return tokens['access_token']
         else:
             st.error(f"Auth Failed: {res.text}")
@@ -145,31 +136,23 @@ def schedule_workout(token, plan_id, plan_name, duration_sec):
 st.title("🏃 KICKR RUN Workout Builder")
 st.divider()
 
-# Variable to hold the valid token for this run
 active_token = None
-
-# A. CHECK SESSION STATE FIRST (Fastest)
 if 'access_token' in st.session_state:
     active_token = st.session_state['access_token']
 
-# B. HANDLE OAUTH REDIRECT (If returning from Wahoo)
 if not active_token and 'code' in st.query_params:
     code = st.query_params['code']
     with st.spinner("Authenticating..."):
         token = exchange_code_for_token(code)
         if token:
             active_token = token
-            # Give the browser 1s to save the cookie before clearing URL
             time.sleep(1)
             st.query_params.clear()
             st.rerun()
 
-# C. CHECK COOKIES (If we have no session state and no code)
 if not active_token:
-    # Small delay to allow cookie manager to mount
     time.sleep(0.1)
     stored_refresh = cookie_manager.get('wahoo_refresh_token')
-    
     if stored_refresh:
         with st.spinner("Resuming session..."):
             token = refresh_access_token(stored_refresh)
@@ -178,12 +161,10 @@ if not active_token:
                 active_token = token
                 st.rerun()
             else:
-                # Cookie was invalid/expired
                 cookie_manager.delete('wahoo_refresh_token')
-                st.warning("Session expired. Please log in again.")
 
 # ==========================================
-# 5. UI LOGIC (Only runs if authenticated)
+# 5. UI LOGIC
 # ==========================================
 
 if not active_token:
@@ -199,20 +180,18 @@ else:
         st.rerun()
 
 # --- WORKOUT BUILDER ---
-
 col1, col2 = st.columns(2)
 with col1:
-    workout_name = st.text_input("Workout Name", "Interval Run")
+    workout_name = st.text_input("Workout Name", "Zone Run")
 with col2:
     st.write("**Threshold Pace (min/mile)**")
-    # ⬇️ CHANGED: Split Minutes and Seconds for easier input
     p_col1, p_col2 = st.columns(2)
+    # ⬇️ UPDATED: Default set to 8:39
     with p_col1:
         p_min = st.number_input("Minutes", 4, 15, 8, key="p_min")
     with p_col2:
-        p_sec = st.number_input("Seconds", 0, 59, 30, key="p_sec")
+        p_sec = st.number_input("Seconds", 0, 59, 39, key="p_sec")
     
-    # Calculate Meters per Second for API
     total_seconds_per_mile = (p_min * 60) + p_sec
     threshold_pace_mps = 1609.34 / total_seconds_per_mile
 
@@ -221,22 +200,55 @@ st.subheader("🛠️ Build Intervals")
 if 'intervals' not in st.session_state:
     st.session_state.intervals = []
 
+# --- CUSTOM ZONE DEFINITIONS ---
+# Calculated based on user's 8:39 Threshold
+ZONES = {
+    "Zone 1 (Recovery)":   (0.50, 0.69), # < 12:33 pace
+    "Zone 2 (Endurance)":  (0.69, 0.83), # 10:29 - 12:32 pace
+    "Zone 3 (Tempo)":      (0.83, 0.91), # 9:32 - 10:28 pace
+    "Zone 4 (Threshold)":  (0.91, 1.05), # 8:14 - 9:31 pace
+    "Zone 5 (VO2 Max)":    (1.05, 1.18), # 7:22 - 8:13 pace
+    "Zone 6 (Anaerobic)":  (1.18, 1.33), # 6:30 - 7:21 pace
+    "Zone 7 (Neuromus)":   (1.33, 1.50)  # > 6:29 pace
+}
+
 with st.form("add_interval", clear_on_submit=True):
     c1, c2, c3 = st.columns(3)
-    with c1: i_name = st.text_input("Label", "Interval")
-    with c2: i_dur = st.number_input("Duration (seconds)", 30, 3600, 60, step=30)
-    with c3: i_pace_pct = st.slider("Pace (% of Threshold)", 50, 150, 100, 5)
-    
-    type_map = {"Warm Up": "wu", "Active": "active", "Recovery": "recover", "Cool Down": "cd"}
-    i_type_label = st.selectbox("Type", list(type_map.keys()))
-    
+    with c1: 
+        i_name = st.text_input("Label", "Interval")
+    with c2: 
+        i_dur = st.number_input("Duration (seconds)", 30, 3600, 300, step=30)
+    with c3:
+        target_mode = st.radio("Target Mode", ["Select Zone", "Custom %"], horizontal=True)
+        
+        if target_mode == "Select Zone":
+            selected_zone_name = st.selectbox("Zone", list(ZONES.keys()))
+            range_low, range_high = ZONES[selected_zone_name]
+            target_pct = (range_low + range_high) / 2
+        else:
+            user_pct = st.slider("Pace (% of Threshold)", 50, 150, 100, 1)
+            target_pct = user_pct / 100.0
+            range_low = target_pct - 0.02
+            range_high = target_pct + 0.02
+
+    if target_pct < 0.69:
+        auto_type = "wu" if "Warm" in i_name else "recover"
+    elif target_pct > 1.05:
+        auto_type = "active"
+    else:
+        auto_type = "active"
+        
     if st.form_submit_button("➕ Add Interval"):
         st.session_state.intervals.append({
             "name": i_name,
             "duration": i_dur,
-            "type_code": type_map[i_type_label],
-            "type_label": i_type_label,
-            "pace_pct": i_pace_pct / 100.0
+            "type_code": auto_type,
+            "type_label": "Zone/Custom",
+            "pace_pct": target_pct,
+            "target_low": range_low,
+            "target_high": range_high,
+            "mode": target_mode,
+            "zone_name": selected_zone_name if target_mode == "Select Zone" else f"{int(target_pct*100)}%"
         })
 
 if st.session_state.intervals:
@@ -244,11 +256,23 @@ if st.session_state.intervals:
     total_time = 0
     for idx, interval in enumerate(st.session_state.intervals):
         total_time += interval['duration']
-        cols = st.columns([0.1, 0.3, 0.2, 0.3, 0.1])
+        cols = st.columns([0.1, 0.4, 0.2, 0.2, 0.1])
         cols[0].write(f"#{idx+1}")
-        cols[1].write(f"**{interval['name']}** ({interval['type_label']})")
+        
+        # Display Pace Range for verification
+        pace_min = (1609.34 / (threshold_pace_mps * interval['target_high'])) / 60
+        pace_max = (1609.34 / (threshold_pace_mps * interval['target_low'])) / 60
+        
+        p_min_str = f"{int(pace_min)}:{int((pace_min%1)*60):02d}"
+        p_max_str = f"{int(pace_max)}:{int((pace_max%1)*60):02d}"
+        
+        cols[1].write(f"**{interval['name']}**")
         cols[2].write(f"{interval['duration']}s")
-        cols[3].write(f"{int(interval['pace_pct']*100)}% Pace")
+        if interval['mode'] == 'Select Zone':
+            cols[3].write(f"**{interval['zone_name']}**\n({p_min_str} - {p_max_str}/mi)")
+        else:
+            cols[3].write(f"**{interval['zone_name']}**")
+            
         if cols[4].button("❌", key=f"del_{idx}"):
             st.session_state.intervals.pop(idx)
             st.rerun()
@@ -259,7 +283,7 @@ if st.session_state.intervals:
                 "header": {
                     "name": workout_name,
                     "version": "1.0.0",
-                    "description": "Custom KICKR RUN Interval Plan",
+                    "description": "Custom KICKR RUN Zone Plan",
                     "workout_type_family": 1, 
                     "workout_type_location": 0, 
                     "threshold_speed": threshold_pace_mps
@@ -274,8 +298,8 @@ if st.session_state.intervals:
                     "intensity_type": i['type_code'],
                     "targets": [{
                         "type": "threshold_speed", 
-                        "low": i['pace_pct'] - 0.01, 
-                        "high": i['pace_pct'] + 0.01
+                        "low": i['target_low'], 
+                        "high": i['target_high']
                     }]
                 })
             
