@@ -17,9 +17,9 @@ try:
     REDIRECT_URI = st.secrets["WAHOO_REDIRECT_URI"]
 except (FileNotFoundError, KeyError):
     # 🚨 Sandbox Defaults (Only for running on your laptop)
-    CLIENT_ID = 'Rn_RRKHwFLUHyYKTBq6filJo-MmPbX2h3caMwL2jOg4'
-    CLIENT_SECRET = 'lEQDPbc1EySK1NT0-0ZVN6G5wyVZHiDXzfxq0NX0e1o'
-    REDIRECT_URI = 'https://localhost'
+    CLIENT_ID = 'INSERT_YOUR_CLIENT_ID_HERE'
+    CLIENT_SECRET = 'INSERT_YOUR_CLIENT_SECRET_HERE'
+    REDIRECT_URI = 'http://localhost:8501'
 
 SCOPES = "power_zones_read power_zones_write workouts_read workouts_write plans_read plans_write routes_read routes_write user_read"
 
