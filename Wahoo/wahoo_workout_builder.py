@@ -134,18 +134,32 @@ def schedule_workout(token, plan_id, plan_name, duration_sec):
 # ==========================================
 
 def move_interval(index, direction):
-    """Moves an interval up (-1) or down (+1) in the list."""
     if direction == -1 and index > 0:
         st.session_state.intervals[index], st.session_state.intervals[index-1] = st.session_state.intervals[index-1], st.session_state.intervals[index]
     elif direction == 1 and index < len(st.session_state.intervals) - 1:
         st.session_state.intervals[index], st.session_state.intervals[index+1] = st.session_state.intervals[index+1], st.session_state.intervals[index]
 
+def get_target_pct(mode, zone_key, slider_val, zone_map):
+    if mode == "Select Zone":
+        low, high = zone_map[zone_key]
+        return (low + high) / 2, low, high, zone_key
+    else:
+        pct = slider_val / 100.0
+        return pct, pct - 0.02, pct + 0.02, f"{slider_val}%"
+
+def determine_type(pct, name):
+    if pct < 0.69:
+        return "wu" if "Warm" in name else "recover"
+    elif pct > 1.05:
+        return "active"
+    else:
+        return "active"
+
 # ==========================================
-# 5. AUTH FLOW EXECUTION
+# 5. AUTH FLOW
 # ==========================================
 
-st.title("🏃 KICKR RUN Workout Builder")
-st.divider()
+st.title("🏃 KICKR RUN Builder")
 
 active_token = None
 if 'access_token' in st.session_state:
@@ -165,7 +179,7 @@ if not active_token:
     time.sleep(0.1)
     stored_refresh = cookie_manager.get('wahoo_refresh_token')
     if stored_refresh:
-        with st.spinner("Resuming session..."):
+        with st.spinner("Resuming..."):
             token = refresh_access_token(stored_refresh)
             if token:
                 st.session_state['access_token'] = token
@@ -174,212 +188,226 @@ if not active_token:
             else:
                 cookie_manager.delete('wahoo_refresh_token')
 
-# ==========================================
-# 6. UI LOGIC
-# ==========================================
-
 if not active_token:
-    st.info("Please log in to Wahoo Cloud to enable uploading.")
+    st.info("Please log in to Wahoo Cloud.")
     st.link_button("Login with Wahoo", get_auth_url())
     st.stop()
 else:
-    st.success("✅ Connected to Wahoo Cloud")
-    if st.button("Logout"):
+    if st.sidebar.button("Logout"):
         cookie_manager.delete('wahoo_refresh_token')
         if 'access_token' in st.session_state:
             del st.session_state['access_token']
         st.rerun()
 
-# --- HEADER SETTINGS ---
-st.subheader("Workout Settings")
-col1, col2 = st.columns([2, 1])
+# ==========================================
+# 6. UI LOGIC
+# ==========================================
 
-with col1:
-    workout_name = st.text_input("Workout Name", "Zone Run")
-
-with col2:
-    st.write("Threshold Pace (min/mi)")
-    t_col1, t_col2 = st.columns(2)
-    with t_col1:
-        p_min = st.number_input("Min", 4, 15, 8, key="p_min", label_visibility="collapsed")
-    with t_col2:
-        p_sec = st.number_input("Sec", 0, 59, 39, key="p_sec", label_visibility="collapsed")
-    
-    total_seconds_per_mile = (p_min * 60) + p_sec
-    threshold_pace_mps = 1609.34 / total_seconds_per_mile
+# --- SETTINGS ---
+with st.expander("⚙️ Workout Settings", expanded=True):
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        workout_name = st.text_input("Workout Name", "Zone Run")
+    with col2:
+        st.write("Threshold Pace")
+        t_col1, t_col2 = st.columns(2)
+        with t_col1: p_min = st.number_input("Min", 4, 15, 8, label_visibility="collapsed")
+        with t_col2: p_sec = st.number_input("Sec", 0, 59, 39, label_visibility="collapsed")
+        threshold_pace_mps = 1609.34 / ((p_min * 60) + p_sec)
 
 st.divider()
-
-# --- INTERVAL BUILDER ---
-st.subheader("🛠️ Build Intervals")
 
 if 'intervals' not in st.session_state:
     st.session_state.intervals = []
 
-# --- CUSTOM ZONE DEFINITIONS ---
 ZONES = {
-    "Zone 1 (Recovery)":   (0.50, 0.69),
-    "Zone 2 (Endurance)":  (0.69, 0.83),
-    "Zone 3 (Tempo)":      (0.83, 0.91),
-    "Zone 4 (Threshold)":  (0.91, 1.05),
-    "Zone 5 (VO2 Max)":    (1.05, 1.18),
-    "Zone 6 (Anaerobic)":  (1.18, 1.33),
-    "Zone 7 (Neuromus)":   (1.33, 1.50)
+    "Zone 1 (Recovery)": (0.50, 0.69),
+    "Zone 2 (Endurance)": (0.69, 0.83),
+    "Zone 3 (Tempo)": (0.83, 0.91),
+    "Zone 4 (Threshold)": (0.91, 1.05),
+    "Zone 5 (VO2 Max)": (1.05, 1.18),
+    "Zone 6 (Anaerobic)": (1.18, 1.33),
+    "Zone 7 (Neuromus)": (1.33, 1.50)
 }
 
-# Row 1: Label and Duration
-r1_col1, r1_col2 = st.columns([1.5, 1])
+# --- BUILDER TABS ---
+tab1, tab2 = st.tabs(["Single Interval", "🔁 Repeat Set"])
 
-with r1_col1:
-    i_name = st.text_input("Label", key="input_name", value="Interval")
-
-with r1_col2:
-    st.write("Duration")
-    d_col1, d_col2 = st.columns(2)
-    with d_col1:
-        i_dur_min = st.number_input("Min", 0, 120, key="input_min", value=5, label_visibility="collapsed")
-    with d_col2:
-        i_dur_sec = st.number_input("Sec", 0, 59, key="input_sec", value=0, label_visibility="collapsed")
-
-st.write("") # Spacer
-
-# Row 2: Target Selection
-r2_col1, r2_col2 = st.columns([1, 2])
-
-with r2_col1:
-    target_mode = st.radio("Target Mode", ["Select Zone", "Custom %"], key="input_mode")
-
-with r2_col2:
-    if target_mode == "Select Zone":
-        selected_zone_name = st.selectbox("Select Zone", list(ZONES.keys()), key="input_zone")
-        range_low, range_high = ZONES[selected_zone_name]
-        target_pct = (range_low + range_high) / 2
-    else:
-        user_pct = st.slider("Pace (% of Threshold)", 50, 150, key="input_slider", value=100)
-        target_pct = user_pct / 100.0
-        range_low = target_pct - 0.02
-        range_high = target_pct + 0.02
-        selected_zone_name = f"{int(target_pct*100)}%"
-
-# Add Button Logic
-add_clicked = st.button("➕ Add Interval", type="primary")
-
-if add_clicked:
-    i_total_seconds = (i_dur_min * 60) + i_dur_sec
+# TAB 1: SINGLE ADD
+with tab1:
+    st.subheader("Add Single Step")
+    r1a, r1b = st.columns([1.5, 1])
+    with r1a: s_name = st.text_input("Label", value="Interval", key="s_name")
+    with r1b:
+        st.caption("Duration")
+        d1, d2 = st.columns(2)
+        with d1: s_min = st.number_input("Min", 0, 120, 5, key="s_min")
+        with d2: s_sec = st.number_input("Sec", 0, 59, 0, key="s_sec")
     
-    if i_total_seconds == 0:
-        st.error("Duration cannot be 0 seconds.")
-    else:
-        if target_pct < 0.69:
-            auto_type = "wu" if "Warm" in i_name else "recover"
-        elif target_pct > 1.05:
-            auto_type = "active"
+    r2a, r2b = st.columns([1, 2])
+    with r2a: s_mode = st.radio("Target", ["Select Zone", "Custom %"], key="s_mode")
+    with r2b:
+        if s_mode == "Select Zone":
+            s_zone = st.selectbox("Zone", list(ZONES.keys()), key="s_zone")
+            s_slider = 100
         else:
-            auto_type = "active"
+            s_zone = list(ZONES.keys())[0]
+            s_slider = st.slider("Percent", 50, 150, 100, key="s_slider")
 
-        st.session_state.intervals.append({
-            "name": i_name,
-            "duration": i_total_seconds,
-            "type_code": auto_type,
-            "type_label": "Zone/Custom",
-            "pace_pct": target_pct,
-            "target_low": range_low,
-            "target_high": range_high,
-            "mode": target_mode,
-            "zone_name": selected_zone_name
-        })
-        
-        del st.session_state["input_name"]
-        del st.session_state["input_min"]
-        del st.session_state["input_sec"]
-        
-        st.rerun()
+    if st.button("➕ Add Single Step", type="primary"):
+        dur = (s_min * 60) + s_sec
+        if dur > 0:
+            tpct, tlow, thigh, tname = get_target_pct(s_mode, s_zone, s_slider, ZONES)
+            st.session_state.intervals.append({
+                "name": s_name, "duration": dur, "type_code": determine_type(tpct, s_name),
+                "target_low": tlow, "target_high": thigh, "zone_name": tname, "mode": s_mode
+            })
+            st.rerun()
 
-# --- PREVIEW TABLE ---
+# TAB 2: LOOP / REPEAT
+with tab2:
+    st.subheader("🔁 Add Repeat Set")
+    st.info("Example: Run Zone 4 (30s) + Recover Zone 1 (90s) -> Repeat 3x")
+    
+    # WORK Part
+    st.markdown("#### 1. Work Interval")
+    w_col1, w_col2 = st.columns([1.5, 1])
+    with w_col1:
+        w_mode = st.radio("Work Target", ["Select Zone", "Custom %"], horizontal=True, key="w_mode")
+        if w_mode == "Select Zone":
+            w_zone = st.selectbox("Zone", list(ZONES.keys()), index=3, key="w_zone") # Default Zone 4
+            w_slider = 100
+        else:
+            w_zone = list(ZONES.keys())[0]
+            w_slider = st.slider("%", 50, 150, 105, key="w_slider")
+            
+    with w_col2:
+        st.caption("Duration")
+        wd1, wd2 = st.columns(2)
+        with wd1: w_min = st.number_input("Min", 0, 60, 0, key="w_min")
+        with wd2: w_sec = st.number_input("Sec", 0, 59, 30, key="w_sec")
+
+    st.divider()
+    
+    # REST Part
+    st.markdown("#### 2. Rest Interval")
+    r_col1, r_col2 = st.columns([1.5, 1])
+    with r_col1:
+        r_mode = st.radio("Rest Target", ["Select Zone", "Custom %"], horizontal=True, key="r_mode")
+        if r_mode == "Select Zone":
+            r_zone = st.selectbox("Zone", list(ZONES.keys()), index=0, key="r_zone") # Default Zone 1
+            r_slider = 100
+        else:
+            r_zone = list(ZONES.keys())[0]
+            r_slider = st.slider("%", 50, 150, 65, key="r_slider")
+            
+    with r_col2:
+        st.caption("Duration")
+        rd1, rd2 = st.columns(2)
+        with rd1: r_min = st.number_input("Min", 0, 60, 1, key="r_min")
+        with rd2: r_sec = st.number_input("Sec", 0, 59, 30, key="r_sec")
+
+    st.divider()
+    
+    # LOOPS
+    l_col1, l_col2 = st.columns([1, 2])
+    with l_col1:
+        loops = st.number_input("🔁 How many times?", 1, 20, 3)
+    with l_col2:
+        st.write("")
+        st.write("")
+        if st.button("➕ Add Repeat Set", type="primary", use_container_width=True):
+            w_dur = (w_min * 60) + w_sec
+            r_dur = (r_min * 60) + r_sec
+            
+            if w_dur == 0 and r_dur == 0:
+                st.error("Duration required.")
+            else:
+                for i in range(loops):
+                    # Add Work
+                    if w_dur > 0:
+                        wpct, wlow, whigh, wname = get_target_pct(w_mode, w_zone, w_slider, ZONES)
+                        st.session_state.intervals.append({
+                            "name": "Work", "duration": w_dur, "type_code": "active",
+                            "target_low": wlow, "target_high": whigh, "zone_name": wname, "mode": w_mode
+                        })
+                    # Add Rest
+                    if r_dur > 0:
+                        rpct, rlow, rhigh, rname = get_target_pct(r_mode, r_zone, r_slider, ZONES)
+                        st.session_state.intervals.append({
+                            "name": "Rest", "duration": r_dur, "type_code": "recover",
+                            "target_low": rlow, "target_high": rhigh, "zone_name": rname, "mode": r_mode
+                        })
+                st.success(f"Added {loops} sets!")
+                time.sleep(0.5)
+                st.rerun()
+
+# --- PREVIEW LIST (MOBILE FRIENDLY CARDS) ---
 if st.session_state.intervals:
     st.write("### Plan Preview")
     total_time = 0
     
-    # ⬇️ UPDATED: Wider "Actions" column (1.5) and adjusted others to fit
-    # Total = 0.5 + 1.5 + 1.2 + 2.3 + 1.5 = 7.0
-    col_ratios = [0.5, 1.5, 1.2, 2.3, 1.5]
-    
-    h1, h2, h3, h4, h5 = st.columns(col_ratios)
-    h1.write("**#**")
-    h2.write("**Label**")
-    h3.write("**Duration**")
-    h4.write("**Target**")
-    h5.write("**Actions**")
-    st.divider()
-
     for idx, interval in enumerate(st.session_state.intervals):
         total_time += interval['duration']
         
-        cols = st.columns(col_ratios)
-        
-        m = interval['duration'] // 60
-        s = interval['duration'] % 60
-        dur_str = f"{m}m {s}s" if s > 0 else f"{m}m"
-
-        pace_min = (1609.34 / (threshold_pace_mps * interval['target_high'])) / 60
-        pace_max = (1609.34 / (threshold_pace_mps * interval['target_low'])) / 60
-        p_min_str = f"{int(pace_min)}:{int((pace_min%1)*60):02d}"
-        p_max_str = f"{int(pace_max)}:{int((pace_max%1)*60):02d}"
-        
-        cols[0].write(f"{idx+1}")
-        cols[1].write(f"**{interval['name']}**")
-        cols[2].write(dur_str)
-        
-        if interval['mode'] == 'Select Zone':
-            cols[3].write(f"{interval['zone_name']} ({p_min_str}-{p_max_str})")
-        else:
-            cols[3].write(f"{interval['zone_name']} Pace")
+        # CARD CONTAINER
+        with st.container(border=True):
+            # Layout: Text on Left, Delete/Move on Bottom Row
             
-        # Action Buttons
-        with cols[4]:
-            c_up, c_down, c_del = st.columns(3)
-            # Disable Up button for first item, Down button for last item
-            if c_up.button("⬆️", key=f"up_{idx}", disabled=(idx == 0)):
+            # Format Data
+            m = interval['duration'] // 60
+            s = interval['duration'] % 60
+            dur_str = f"{m}m {s}s" if s > 0 else f"{m}m"
+            
+            p_min = (1609.34 / (threshold_pace_mps * interval['target_high'])) / 60
+            p_max = (1609.34 / (threshold_pace_mps * interval['target_low'])) / 60
+            pace_str = f"{int(p_min)}:{int((p_min%1)*60):02d}-{int(p_max)}:{int((p_max%1)*60):02d}"
+            
+            # Row 1: Content
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.markdown(f"**{idx+1}. {interval['name']}**")
+                st.caption(f"⏱️ {dur_str}  |  🎯 {interval['zone_name']} ({pace_str}/mi)")
+            
+            # Row 2: Big Mobile Buttons
+            b1, b2, b3 = st.columns(3)
+            
+            # Up
+            if b1.button("⬆️ Up", key=f"u{idx}", disabled=(idx==0), use_container_width=True):
                 move_interval(idx, -1)
                 st.rerun()
-            if c_down.button("⬇️", key=f"down_{idx}", disabled=(idx == len(st.session_state.intervals)-1)):
+            
+            # Down
+            if b2.button("⬇️ Dn", key=f"d{idx}", disabled=(idx==len(st.session_state.intervals)-1), use_container_width=True):
                 move_interval(idx, 1)
                 st.rerun()
-            if c_del.button("❌", key=f"del_{idx}"):
+                
+            # Delete
+            if b3.button("❌ Del", key=f"x{idx}", type="secondary", use_container_width=True):
                 st.session_state.intervals.pop(idx)
                 st.rerun()
+
+    st.markdown(f"**Total Duration:** {int(total_time/60)} minutes")
     
-    st.caption(f"Total Workout Duration: {int(total_time/60)} minutes")
-    
-    if st.button("🚀 Upload & Schedule to Wahoo", type="primary", use_container_width=True):
-        with st.spinner("Uploading plan..."):
+    if st.button("🚀 Upload & Schedule", type="primary", use_container_width=True):
+        with st.spinner("Uploading..."):
             plan_json = {
                 "header": {
-                    "name": workout_name,
-                    "version": "1.0.0",
-                    "description": "Custom KICKR RUN Zone Plan",
-                    "workout_type_family": 1, 
-                    "workout_type_location": 0, 
-                    "threshold_speed": threshold_pace_mps
+                    "name": workout_name, "version": "1.0.0", "description": "Streamlit Builder Plan",
+                    "workout_type_family": 1, "workout_type_location": 0, "threshold_speed": threshold_pace_mps
                 },
                 "intervals": []
             }
             for i in st.session_state.intervals:
                 plan_json["intervals"].append({
-                    "name": i['name'],
-                    "exit_trigger_type": "time",
-                    "exit_trigger_value": i['duration'],
-                    "intensity_type": i['type_code'],
-                    "targets": [{
-                        "type": "threshold_speed", 
-                        "low": i['target_low'], 
-                        "high": i['target_high']
-                    }]
+                    "name": i['name'], "exit_trigger_type": "time", "exit_trigger_value": i['duration'],
+                    "intensity_type": i['type_code'], 
+                    "targets": [{"type": "threshold_speed", "low": i['target_low'], "high": i['target_high']}]
                 })
             
-            plan_id = upload_plan_to_wahoo(active_token, plan_json, workout_name)
-            if plan_id:
-                w_id = schedule_workout(active_token, plan_id, workout_name, total_time)
-                if w_id:
-                    st.success(f"Success! Workout scheduled (ID: {w_id})")
+            pid = upload_plan_to_wahoo(active_token, plan_json, workout_name)
+            if pid:
+                wid = schedule_workout(active_token, pid, workout_name, total_time)
+                if wid:
+                    st.success("Scheduled! 🎉")
                     st.balloons()
