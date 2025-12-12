@@ -19,29 +19,19 @@ try:
     CLIENT_SECRET = st.secrets["WAHOO_CLIENT_SECRET"]
     REDIRECT_URI = st.secrets["WAHOO_REDIRECT_URI"]
 except (FileNotFoundError, KeyError):
-    # 🚨 Stop execution if secrets are missing (prevents hardcoding risks)
     st.error("❌ Missing Secrets! Please create a `.streamlit/secrets.toml` file with your Wahoo credentials.")
-    st.info("The file should look like this:\n"
-            "```toml\n"
-            "WAHOO_CLIENT_ID = 'your_client_id'\n"
-            "WAHOO_CLIENT_SECRET = 'your_client_secret'\n"
-            "WAHOO_REDIRECT_URI = 'https://localhost'\n"
-            "```")
     st.stop()
 
 # Scopes needed for plans/workouts
 SCOPES = "power_zones_read power_zones_write workouts_read workouts_write plans_read plans_write user_read"
 
 # ==========================================
-# 2. AUTHENTICATION (The "Sticky" Logic)
+# 2. AUTHENTICATION (Fixed for Streamlit Caching)
 # ==========================================
 
-# Initialize Cookie Manager
-@st.cache_resource
-def get_manager():
-    return stx.CookieManager()
-
-cookie_manager = get_manager()
+# ⬇️ CHANGED: Removed @st.cache_resource and get_manager() function. 
+# We now instantiate this directly to avoid the CachedWidgetWarning.
+cookie_manager = stx.CookieManager()
 
 def get_auth_url():
     params = {
@@ -154,6 +144,8 @@ st.title("🏃 KICKR RUN Workout Builder")
 
 # --- AUTHENTICATION HANDLER ---
 access_token = None
+# Small delay to ensure cookies load on first render if needed
+time.sleep(0.1)
 stored_refresh_token = cookie_manager.get('wahoo_refresh_token')
 
 # Case A: Handling Redirect from Wahoo
